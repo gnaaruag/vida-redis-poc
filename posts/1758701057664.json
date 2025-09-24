@@ -1,9 +1,9 @@
 {
-  "title": "new postttttt",
-  "content": "hello redis",
-  "author": "gg",
-  "published": true,
   "id": "1758701057664",
+  "title": "new postttttt",
+  "content": "hello redis\n\nelectric boogaloo",
+  "author": "gg",
   "createdAt": "2025-09-24T08:04:17.664Z",
-  "updatedAt": "2025-09-24T08:04:17.664Z"
+  "updatedAt": "2025-09-24T08:06:35.763Z",
+  "published": true
 }
