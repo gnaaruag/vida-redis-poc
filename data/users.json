@@ -12,5 +12,12 @@
     "password": "$2b$12$G/WLQtqKk02MIY51GrKxCu/fDMUNQEP./SO.vuOkeUAIAIWdFnZga",
     "name": "gaurang",
     "createdAt": "2025-09-23T13:13:20.155Z"
+  },
+  {
+    "id": "1758699934701",
+    "email": "gaurang@hotmail.com",
+    "password": "$2b$12$33gF8.1anRqtRvRcFKIRTOZbdepznAsSUydvjsVdr/B3DudRunosK",
+    "name": "gg",
+    "createdAt": "2025-09-24T07:45:34.701Z"
   }
 ]
