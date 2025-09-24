@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useSession } from "next-auth/react"
 import { useRouter } from "next/navigation"
 import dynamic from "next/dynamic"
@@ -20,7 +20,7 @@ interface BlogPost {
   published: boolean
 }
 
-export default function EditPost({ params }: { params: { id: string } }) {
+export default function EditPost({ params }: { params: Promise<{ id: string }> }) {
   const { data: session, status } = useSession()
   const router = useRouter()
   const [post, setPost] = useState<BlogPost | null>(null)
@@ -31,21 +31,13 @@ export default function EditPost({ params }: { params: { id: string } }) {
   const [deleting, setDeleting] = useState(false)
   const [preview, setPreview] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [postId, setPostId] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (status === "unauthenticated") {
-      router.push("/auth/signin")
-      return
-    }
-
-    if (status === "authenticated") {
-      fetchPost()
-    }
-  }, [status, params.id, router])
-
-  const fetchPost = async () => {
+  const fetchPost = useCallback(async () => {
+    if (!postId) return
+    
     try {
-      const response = await fetch(`/api/posts/${params.id}`)
+      const response = await fetch(`/api/posts/${postId}`)
       if (response.ok) {
         const postData = await response.json()
         setPost(postData)
@@ -61,7 +53,26 @@ export default function EditPost({ params }: { params: { id: string } }) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [postId, router])
+
+  useEffect(() => {
+    const getPostId = async () => {
+      const { id } = await params
+      setPostId(id)
+    }
+    getPostId()
+  }, [params])
+
+  useEffect(() => {
+    if (status === "unauthenticated") {
+      router.push("/auth/signin")
+      return
+    }
+
+    if (status === "authenticated" && postId) {
+      fetchPost()
+    }
+  }, [status, postId, fetchPost, router])
 
   const handleSave = async () => {
     if (!title.trim() || !content.trim()) {
@@ -71,7 +82,7 @@ export default function EditPost({ params }: { params: { id: string } }) {
 
     setSaving(true)
     try {
-      const response = await fetch(`/api/posts/${params.id}`, {
+      const response = await fetch(`/api/posts/${postId}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -106,7 +117,7 @@ export default function EditPost({ params }: { params: { id: string } }) {
 
     setDeleting(true)
     try {
-      const response = await fetch(`/api/posts/${params.id}`, {
+      const response = await fetch(`/api/posts/${postId}`, {
         method: "DELETE",
       })
 

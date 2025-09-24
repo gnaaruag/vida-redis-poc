@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getServerSession } from "next-auth"
-import { authOptions } from "@/lib/auth"
+import { auth } from "@/lib/auth"
 import { githubService } from "@/lib/github"
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const post = await githubService.getPost(params.id)
+    const { id } = await params
+    const post = await githubService.getPost(id)
     
     if (!post) {
       return NextResponse.json(
@@ -29,10 +29,10 @@ export async function GET(
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions)
+    const session = await auth()
     
     if (!session) {
       return NextResponse.json(
@@ -41,14 +41,20 @@ export async function PUT(
       )
     }
 
+    const { id } = await params
     const { title, content, published } = await request.json()
 
-    const updates: any = {}
+    const updates: Partial<{ title: string; content: string; published: boolean }> = {}
     if (title !== undefined) updates.title = title
     if (content !== undefined) updates.content = content
     if (published !== undefined) updates.published = published
 
-    const post = await githubService.updatePost(params.id, updates)
+    const authorInfo = {
+      name: session.user?.name || session.user?.email || 'Unknown User',
+      email: session.user?.email || 'unknown@example.com'
+    }
+
+    const post = await githubService.updatePost(id, updates, authorInfo)
 
     if (!post) {
       return NextResponse.json(
@@ -69,10 +75,10 @@ export async function PUT(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions)
+    const session = await auth()
     
     if (!session) {
       return NextResponse.json(
@@ -81,7 +87,14 @@ export async function DELETE(
       )
     }
 
-    const success = await githubService.deletePost(params.id)
+    const { id } = await params
+    
+    const authorInfo = {
+      name: session.user?.name || session.user?.email || 'Unknown User',
+      email: session.user?.email || 'unknown@example.com'
+    }
+
+    const success = await githubService.deletePost(id, authorInfo)
 
     if (!success) {
       return NextResponse.json(

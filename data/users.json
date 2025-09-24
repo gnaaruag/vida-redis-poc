@@ -1,0 +1,16 @@
+[
+  {
+    "id": "1758633013117",
+    "email": "gaurang40304@gmail.com",
+    "password": "$2b$12$MJThU0AEnPCtnEiKv2LklOBHk1RLXztLIuZS8q9P.6WxMrrA0UqF6",
+    "name": "gaurang ratnaparkhi",
+    "createdAt": "2025-09-23T13:10:13.117Z"
+  },
+  {
+    "id": "1758633200155",
+    "email": "gaurang@ownpath.com",
+    "password": "$2b$12$G/WLQtqKk02MIY51GrKxCu/fDMUNQEP./SO.vuOkeUAIAIWdFnZga",
+    "name": "gaurang",
+    "createdAt": "2025-09-23T13:13:20.155Z"
+  }
+]

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getServerSession } from "next-auth"
-import { authOptions } from "@/lib/auth"
+import { auth } from "@/lib/auth"
 import { githubService } from "@/lib/github"
 
 export async function GET() {
@@ -18,7 +17,7 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
+    const session = await auth()
     
     if (!session) {
       return NextResponse.json(
@@ -36,12 +35,17 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const authorInfo = {
+      name: session.user?.name || session.user?.email || 'Unknown User',
+      email: session.user?.email || 'unknown@example.com'
+    }
+
     const post = await githubService.createPost({
       title,
       content,
-      author: session.user.name || session.user.email!,
+      author: authorInfo.name,
       published,
-    })
+    }, authorInfo)
 
     if (!post) {
       return NextResponse.json(

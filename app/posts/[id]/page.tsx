@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useSession } from "next-auth/react"
 import { useRouter } from "next/navigation"
 import { ArrowLeft, Edit, Trash2 } from "lucide-react"
@@ -16,20 +16,19 @@ interface BlogPost {
   published: boolean
 }
 
-export default function PostView({ params }: { params: { id: string } }) {
-  const { data: session, status } = useSession()
+export default function PostView({ params }: { params: Promise<{ id: string }> }) {
+  const { data: session } = useSession()
   const router = useRouter()
   const [post, setPost] = useState<BlogPost | null>(null)
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState(false)
+  const [postId, setPostId] = useState<string | null>(null)
 
-  useEffect(() => {
-    fetchPost()
-  }, [params.id])
-
-  const fetchPost = async () => {
+  const fetchPost = useCallback(async () => {
+    if (!postId) return
+    
     try {
-      const response = await fetch(`/api/posts/${params.id}`)
+      const response = await fetch(`/api/posts/${postId}`)
       if (response.ok) {
         const postData = await response.json()
         setPost(postData)
@@ -42,7 +41,21 @@ export default function PostView({ params }: { params: { id: string } }) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [postId, router])
+
+  useEffect(() => {
+    const getPostId = async () => {
+      const { id } = await params
+      setPostId(id)
+    }
+    getPostId()
+  }, [params])
+
+  useEffect(() => {
+    if (postId) {
+      fetchPost()
+    }
+  }, [postId, fetchPost])
 
   const handleDelete = async () => {
     if (!session) return
@@ -53,7 +66,7 @@ export default function PostView({ params }: { params: { id: string } }) {
 
     setDeleting(true)
     try {
-      const response = await fetch(`/api/posts/${params.id}`, {
+      const response = await fetch(`/api/posts/${postId}`, {
         method: "DELETE",
       })
 

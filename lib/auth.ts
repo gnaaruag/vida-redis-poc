@@ -1,8 +1,20 @@
-import type { NextAuthOptions } from "next-auth"
-import CredentialsProvider from "next-auth/providers/credentials"
+import NextAuth from "next-auth"
+import Credentials from "next-auth/providers/credentials"
 import bcrypt from "bcryptjs"
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs"
 import { join } from "path"
+
+interface JWTToken {
+  id?: string
+  [key: string]: unknown
+}
+
+interface SessionUser {
+  id?: string
+  name?: string | null
+  email?: string | null
+  [key: string]: unknown
+}
 
 const DATA_DIR = process.env.DATA_DIR || "./data"
 const USERS_FILE = join(DATA_DIR, "users.json")
@@ -25,6 +37,18 @@ interface User {
   createdAt: string
 }
 
+// Type guard to ensure user has required properties
+function isValidUser(user: unknown): user is User {
+  if (!user || typeof user !== 'object') return false
+  
+  const obj = user as Record<string, unknown>
+  return typeof obj.id === 'string' && 
+         typeof obj.email === 'string' && 
+         typeof obj.password === 'string' && 
+         typeof obj.name === 'string' && 
+         typeof obj.createdAt === 'string'
+}
+
 function getUsers(): User[] {
   try {
     const data = readFileSync(USERS_FILE, "utf8")
@@ -38,9 +62,9 @@ function saveUsers(users: User[]) {
   writeFileSync(USERS_FILE, JSON.stringify(users, null, 2))
 }
 
-export const authOptions: NextAuthOptions = {
+export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
-    CredentialsProvider({
+    Credentials({
       name: "credentials",
       credentials: {
         email: { label: "Email", type: "email" },
@@ -52,39 +76,41 @@ export const authOptions: NextAuthOptions = {
         }
 
         const users = getUsers()
-        const user = users.find(u => u.email === credentials.email)
+        const foundUser = users.find(u => u.email === credentials.email)
 
-        if (!user) {
+        if (!foundUser) {
           return null
         }
 
-        const isPasswordValid = await bcrypt.compare(credentials.password, user.password || "")
+        // Direct access to password with type assertion
+        const userObj = foundUser as unknown as { password: string }
+        const passwordHash: string = userObj.password
+        const isPasswordValid = await bcrypt.compare(credentials.password as string, passwordHash as string)
         
         if (!isPasswordValid) {
           return null
         }
 
         return {
-          id: user.id,
-          email: user.email,
-          name: user.name,
+          id: foundUser.id,
+          email: foundUser.email,
+          name: foundUser.name,
         }
       }
     })
   ],
   pages: {
     signIn: "/auth/signin",
-    signUp: "/auth/signup",
   },
   callbacks: {
-    async jwt({ token, user }: { token: any; user: any }) {
-      if (user) {
-        token.id = user.id
+    async jwt({ token, user }: { token: JWTToken; user: unknown }) {
+      if (user && typeof user === 'object' && user !== null && 'id' in user) {
+        token.id = (user as { id: string }).id
       }
       return token
     },
-    async session({ session, token }: { session: any; token: any }) {
-      if (token) {
+    async session({ session, token }: { session: any; token: JWTToken }) {
+      if (token && session.user) {
         session.user.id = token.id as string
       }
       return session
@@ -93,7 +119,7 @@ export const authOptions: NextAuthOptions = {
   session: {
     strategy: "jwt"
   }
-}
+})
 
 // Helper function to create a new user
 export async function createUser(email: string, password: string, name: string) {

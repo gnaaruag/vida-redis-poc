@@ -1,4 +1,6 @@
 import { Octokit } from "@octokit/rest"
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "fs"
+import { join } from "path"
 
 const octokit = new Octokit({
   auth: process.env.GITHUB_TOKEN,
@@ -6,6 +8,13 @@ const octokit = new Octokit({
 
 const REPO_OWNER = process.env.GITHUB_REPO_OWNER!
 const REPO_NAME = process.env.GITHUB_REPO_NAME!
+const DATA_DIR = process.env.DATA_DIR || "./data"
+const POSTS_DIR = join(DATA_DIR, "posts")
+
+// Ensure posts directory exists
+if (!existsSync(POSTS_DIR)) {
+  mkdirSync(POSTS_DIR, { recursive: true })
+}
 
 export interface BlogPost {
   id: string
@@ -16,6 +25,9 @@ export interface BlogPost {
   updatedAt: string
   published: boolean
 }
+
+// Check if we're in development mode (no GitHub token or local development)
+const isDevelopment = !process.env.GITHUB_TOKEN || process.env.NODE_ENV === 'development'
 
 export class GitHubService {
   private async getFileContent(path: string): Promise<string | null> {
@@ -40,16 +52,41 @@ export class GitHubService {
     path: string,
     content: string,
     message: string,
-    sha?: string
+    sha?: string,
+    author?: { name: string; email: string }
   ): Promise<boolean> {
     try {
-      await octokit.repos.createOrUpdateFileContents({
+      const commitData: Record<string, unknown> = {
         owner: REPO_OWNER,
         repo: REPO_NAME,
         path,
         message,
         content: Buffer.from(content).toString("base64"),
         sha,
+      }
+
+      // Add author information if provided
+      if (author) {
+        commitData.author = {
+          name: author.name,
+          email: author.email,
+        }
+        commitData.committer = {
+          name: author.name,
+          email: author.email,
+        }
+      }
+
+      await octokit.repos.createOrUpdateFileContents(commitData as {
+        owner: string
+        repo: string
+        path: string
+        message: string
+        content: string
+        sha?: string
+        branch?: string
+        committer?: { name: string; email: string }
+        author?: { name: string; email: string }
       })
       return true
     } catch (error) {
@@ -59,6 +96,10 @@ export class GitHubService {
   }
 
   async getAllPosts(): Promise<BlogPost[]> {
+    if (isDevelopment) {
+      return this.getAllPostsLocal()
+    }
+
     try {
       const { data } = await octokit.repos.getContent({
         owner: REPO_OWNER,
@@ -93,7 +134,39 @@ export class GitHubService {
     }
   }
 
+  private getAllPostsLocal(): BlogPost[] {
+    try {
+      if (!existsSync(POSTS_DIR)) {
+        return []
+      }
+
+      const files = readdirSync(POSTS_DIR)
+      const posts: BlogPost[] = []
+
+      for (const file of files) {
+        if (file.endsWith(".json")) {
+          try {
+            const content = readFileSync(join(POSTS_DIR, file), "utf8")
+            const post = JSON.parse(content)
+            posts.push(post)
+          } catch (error) {
+            console.error(`Error parsing post ${file}:`, error)
+          }
+        }
+      }
+
+      return posts.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    } catch (error) {
+      console.error("Error fetching local posts:", error)
+      return []
+    }
+  }
+
   async getPost(id: string): Promise<BlogPost | null> {
+    if (isDevelopment) {
+      return this.getPostLocal(id)
+    }
+
     const content = await this.getFileContent(`posts/${id}.json`)
     if (!content) return null
 
@@ -105,7 +178,25 @@ export class GitHubService {
     }
   }
 
-  async createPost(post: Omit<BlogPost, "id" | "createdAt" | "updatedAt">): Promise<BlogPost | null> {
+  private getPostLocal(id: string): BlogPost | null {
+    try {
+      const filePath = join(POSTS_DIR, `${id}.json`)
+      if (!existsSync(filePath)) {
+        return null
+      }
+
+      const content = readFileSync(filePath, "utf8")
+      return JSON.parse(content)
+    } catch (error) {
+      console.error(`Error reading local post ${id}:`, error)
+      return null
+    }
+  }
+
+  async createPost(
+    post: Omit<BlogPost, "id" | "createdAt" | "updatedAt">,
+    author?: { name: string; email: string }
+  ): Promise<BlogPost | null> {
     const id = Date.now().toString()
     const now = new Date().toISOString()
     
@@ -116,16 +207,41 @@ export class GitHubService {
       updatedAt: now,
     }
 
+    if (isDevelopment) {
+      return this.createPostLocal(newPost)
+    }
+
+    const commitMessage = author 
+      ? `Create post: ${post.title} (by ${author.name} <${author.email}>)`
+      : `Create post: ${post.title}`
+
     const success = await this.createOrUpdateFile(
       `posts/${id}.json`,
       JSON.stringify(newPost, null, 2),
-      `Create post: ${post.title}`
+      commitMessage,
+      undefined,
+      author
     )
 
     return success ? newPost : null
   }
 
-  async updatePost(id: string, updates: Partial<Omit<BlogPost, "id" | "createdAt">>): Promise<BlogPost | null> {
+  private createPostLocal(post: BlogPost): BlogPost | null {
+    try {
+      const filePath = join(POSTS_DIR, `${post.id}.json`)
+      writeFileSync(filePath, JSON.stringify(post, null, 2))
+      return post
+    } catch (error) {
+      console.error(`Error creating local post ${post.id}:`, error)
+      return null
+    }
+  }
+
+  async updatePost(
+    id: string, 
+    updates: Partial<Omit<BlogPost, "id" | "createdAt">>,
+    author?: { name: string; email: string }
+  ): Promise<BlogPost | null> {
     const existingPost = await this.getPost(id)
     if (!existingPost) return null
 
@@ -133,6 +249,10 @@ export class GitHubService {
       ...existingPost,
       ...updates,
       updatedAt: new Date().toISOString(),
+    }
+
+    if (isDevelopment) {
+      return this.updatePostLocal(updatedPost)
     }
 
     // Get the current file SHA
@@ -151,17 +271,37 @@ export class GitHubService {
       console.error("Error getting file SHA:", error)
     }
 
+    const commitMessage = author 
+      ? `Update post: ${updatedPost.title} (by ${author.name} <${author.email}>)`
+      : `Update post: ${updatedPost.title}`
+
     const success = await this.createOrUpdateFile(
       `posts/${id}.json`,
       JSON.stringify(updatedPost, null, 2),
-      `Update post: ${updatedPost.title}`,
-      sha
+      commitMessage,
+      sha,
+      author
     )
 
     return success ? updatedPost : null
   }
 
-  async deletePost(id: string): Promise<boolean> {
+  private updatePostLocal(post: BlogPost): BlogPost | null {
+    try {
+      const filePath = join(POSTS_DIR, `${post.id}.json`)
+      writeFileSync(filePath, JSON.stringify(post, null, 2))
+      return post
+    } catch (error) {
+      console.error(`Error updating local post ${post.id}:`, error)
+      return null
+    }
+  }
+
+  async deletePost(id: string, author?: { name: string; email: string }): Promise<boolean> {
+    if (isDevelopment) {
+      return this.deletePostLocal(id)
+    }
+
     try {
       // Get the current file SHA
       const { data } = await octokit.repos.getContent({
@@ -174,17 +314,58 @@ export class GitHubService {
         return false
       }
 
-      await octokit.repos.deleteFile({
+      const commitMessage = author 
+        ? `Delete post: ${id} (by ${author.name} <${author.email}>)`
+        : `Delete post: ${id}`
+
+      const deleteData: Record<string, unknown> = {
         owner: REPO_OWNER,
         repo: REPO_NAME,
         path: `posts/${id}.json`,
-        message: `Delete post: ${id}`,
+        message: commitMessage,
         sha: data.sha,
+      }
+
+      // Add author information if provided
+      if (author) {
+        deleteData.author = {
+          name: author.name,
+          email: author.email,
+        }
+        deleteData.committer = {
+          name: author.name,
+          email: author.email,
+        }
+      }
+
+      await octokit.repos.deleteFile(deleteData as {
+        owner: string
+        repo: string
+        path: string
+        message: string
+        sha: string
+        branch?: string
+        committer?: { name: string; email: string }
+        author?: { name: string; email: string }
       })
 
       return true
     } catch (error) {
       console.error(`Error deleting post ${id}:`, error)
+      return false
+    }
+  }
+
+  private deletePostLocal(id: string): boolean {
+    try {
+      const filePath = join(POSTS_DIR, `${id}.json`)
+      if (existsSync(filePath)) {
+        unlinkSync(filePath)
+        return true
+      }
+      return false
+    } catch (error) {
+      console.error(`Error deleting local post ${id}:`, error)
       return false
     }
   }

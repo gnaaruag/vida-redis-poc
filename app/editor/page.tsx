@@ -10,15 +10,7 @@ import { markdownToHtml } from "@/lib/markdown"
 // Dynamically import the markdown editor to avoid SSR issues
 const MDEditor = dynamic(() => import("@uiw/react-md-editor"), { ssr: false })
 
-interface BlogPost {
-  id: string
-  title: string
-  content: string
-  author: string
-  createdAt: string
-  updatedAt: string
-  published: boolean
-}
+// BlogPost interface removed as it's not used in this component
 
 export default function Editor() {
   const { data: session, status } = useSession()

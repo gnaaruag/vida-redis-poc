@@ -87,6 +87,7 @@ The application will be available at `http://localhost:3000`.
 ### Content Management
 - All blog posts are stored as JSON files in the GitHub repository
 - The bot automatically commits changes when users create/edit posts
+- Commit messages include the user's name and email who made the change
 - Posts are organized in a `posts/` directory in the repository
 
 ### GitHub Integration
