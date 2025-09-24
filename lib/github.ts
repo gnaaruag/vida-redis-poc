@@ -1,6 +1,7 @@
 import { Octokit } from "@octokit/rest"
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "fs"
 import { join } from "path"
+import { redisCache, CachedBlogPost } from "./redis"
 
 const octokit = new Octokit({
   auth: process.env.GITHUB_TOKEN,
@@ -27,7 +28,7 @@ export interface BlogPost {
 }
 
 // Check if we're in development mode (no GitHub token or local development)
-const isDevelopment = !process.env.GITHUB_TOKEN || process.env.NODE_ENV === 'development'
+const isDevelopment = false
 
 export class GitHubService {
   private async getFileContent(path: string): Promise<string | null> {
@@ -100,6 +101,26 @@ export class GitHubService {
       return this.getAllPostsLocal()
     }
 
+    // Always check Redis first (Redis is primary source)
+    const isRedisAvailable = await redisCache.isAvailable()
+    if (isRedisAvailable) {
+      const cachedPosts = await redisCache.getAllPosts()
+      if (cachedPosts && cachedPosts.length > 0) {
+        console.log('Serving posts from Redis cache')
+        return cachedPosts.map(post => ({
+          id: post.id,
+          title: post.title,
+          content: post.content,
+          author: post.author,
+          createdAt: post.createdAt,
+          updatedAt: post.updatedAt,
+          published: post.published
+        }))
+      }
+    }
+
+    // Redis cache miss or expired - fetch from GitHub (do NOT populate Redis)
+    console.log('Redis cache miss/expired - fetching from GitHub')
     try {
       const { data } = await octokit.repos.getContent({
         owner: REPO_OWNER,
@@ -127,9 +148,14 @@ export class GitHubService {
         }
       }
 
-      return posts.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      const sortedPosts = posts.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      
+      // Do NOT store in Redis when cache expires - only serve from GitHub
+      console.log('Serving posts directly from GitHub (cache expired)')
+
+      return sortedPosts
     } catch (error) {
-      console.error("Error fetching posts:", error)
+      console.error("Error fetching posts from GitHub:", error)
       return []
     }
   }
@@ -167,11 +193,36 @@ export class GitHubService {
       return this.getPostLocal(id)
     }
 
+    // Always check Redis first (Redis is primary source)
+    const isRedisAvailable = await redisCache.isAvailable()
+    if (isRedisAvailable) {
+      const cachedPost = await redisCache.getPost(id)
+      if (cachedPost) {
+        console.log(`Serving post ${id} from Redis cache`)
+        return {
+          id: cachedPost.id,
+          title: cachedPost.title,
+          content: cachedPost.content,
+          author: cachedPost.author,
+          createdAt: cachedPost.createdAt,
+          updatedAt: cachedPost.updatedAt,
+          published: cachedPost.published
+        }
+      }
+    }
+
+    // Redis cache miss or expired - fetch from GitHub (do NOT populate Redis)
+    console.log(`Redis cache miss/expired for post ${id} - fetching from GitHub`)
     const content = await this.getFileContent(`posts/${id}.json`)
     if (!content) return null
 
     try {
-      return JSON.parse(content)
+      const post = JSON.parse(content)
+      
+      // Do NOT store in Redis when cache expires - only serve from GitHub
+      console.log(`Serving post ${id} directly from GitHub (cache expired)`)
+      
+      return post
     } catch (error) {
       console.error(`Error parsing post ${id}:`, error)
       return null
@@ -211,6 +262,18 @@ export class GitHubService {
       return this.createPostLocal(newPost)
     }
 
+    // Store in Redis first (Redis is primary source)
+    const isRedisAvailable = await redisCache.isAvailable()
+    if (isRedisAvailable) {
+      const postToCache: CachedBlogPost = {
+        ...newPost,
+        cachedAt: new Date().toISOString()
+      }
+      await redisCache.setPost(postToCache)
+      console.log(`Stored new post ${id} in Redis`)
+    }
+
+    // Then store in GitHub
     const commitMessage = author 
       ? `Create post: ${post.title} (by ${author.name} <${author.email}>)`
       : `Create post: ${post.title}`
@@ -222,6 +285,20 @@ export class GitHubService {
       undefined,
       author
     )
+
+    if (success) {
+      // Update the posts list cache
+      if (isRedisAvailable) {
+        await redisCache.invalidateAllPosts()
+        console.log(`Updated posts list cache for new post ${id}`)
+      }
+    } else {
+      // If GitHub failed, remove from Redis
+      if (isRedisAvailable) {
+        await redisCache.invalidatePost(id)
+        console.log(`Removed post ${id} from Redis due to GitHub failure`)
+      }
+    }
 
     return success ? newPost : null
   }
@@ -255,6 +332,17 @@ export class GitHubService {
       return this.updatePostLocal(updatedPost)
     }
 
+    // Update Redis first (Redis is primary source)
+    const isRedisAvailable = await redisCache.isAvailable()
+    if (isRedisAvailable) {
+      const postToCache: CachedBlogPost = {
+        ...updatedPost,
+        cachedAt: new Date().toISOString()
+      }
+      await redisCache.setPost(postToCache)
+      console.log(`Updated post ${id} in Redis`)
+    }
+
     // Get the current file SHA
     let sha: string | undefined
     try {
@@ -283,6 +371,24 @@ export class GitHubService {
       author
     )
 
+    if (success) {
+      // Update the posts list cache
+      if (isRedisAvailable) {
+        await redisCache.invalidateAllPosts()
+        console.log(`Updated posts list cache for post ${id}`)
+      }
+    } else {
+      // If GitHub failed, revert Redis to original post
+      if (isRedisAvailable) {
+        const originalPost: CachedBlogPost = {
+          ...existingPost,
+          cachedAt: new Date().toISOString()
+        }
+        await redisCache.setPost(originalPost)
+        console.log(`Reverted post ${id} in Redis due to GitHub failure`)
+      }
+    }
+
     return success ? updatedPost : null
   }
 
@@ -300,6 +406,13 @@ export class GitHubService {
   async deletePost(id: string, author?: { name: string; email: string }): Promise<boolean> {
     if (isDevelopment) {
       return this.deletePostLocal(id)
+    }
+
+    // Remove from Redis first (Redis is primary source)
+    const isRedisAvailable = await redisCache.isAvailable()
+    if (isRedisAvailable) {
+      await redisCache.invalidatePost(id)
+      console.log(`Removed post ${id} from Redis`)
     }
 
     try {
@@ -348,6 +461,12 @@ export class GitHubService {
         committer?: { name: string; email: string }
         author?: { name: string; email: string }
       })
+
+      // Update the posts list cache
+      if (isRedisAvailable) {
+        await redisCache.invalidateAllPosts()
+        console.log(`Updated posts list cache after deleting post ${id}`)
+      }
 
       return true
     } catch (error) {
